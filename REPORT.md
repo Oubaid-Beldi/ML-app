@@ -290,46 +290,170 @@ After running the training script, you'll find:
 
 ## Docker Support
 
+### Overview
+
+The application is fully containerized with Docker, providing consistent deployment across different environments. The Dockerfile creates a lightweight image based on Python 3.11-slim and includes all necessary dependencies.
+
+### Dockerfile Features
+
+- **Base Image:** Python 3.11-slim (minimal footprint)
+- **Build Tools:** GCC for compiling Python packages
+- **Dependencies:** All packages from requirements.txt including FastAPI and uvicorn
+- **Port:** Exposes port 8000 for the FastAPI application
+- **Environment:** PYTHONPATH configured for proper module imports
+- **Volume Support:** Can mount external directories for models and data
+
 ### Building Docker Image
 
 Build the Docker image locally:
 
 ```bash
-docker build -t ml-app:latest .
+sudo docker build -t ml-app:latest .
 ```
 
-The Dockerfile:
-- Uses Python 3.11-slim as base image
-- Installs all dependencies from `requirements.txt`
-- Copies source code and models directory
-- Sets PYTHONPATH environment variable
-- Default command runs the training script
+**Build output:**
+```
+[+] Building 25.0s (12/12) FINISHED
+ => [internal] load build definition from Dockerfile
+ => [internal] load metadata for docker.io/library/python:3.11-slim
+ => [1/7] FROM docker.io/library/python:3.11-slim
+ => [2/7] WORKDIR /app
+ => [3/7] RUN apt-get update && apt-get install -y gcc
+ => [4/7] COPY requirements.txt .
+ => [5/7] RUN pip install --no-cache-dir -r requirements.txt
+ => [6/7] COPY src/ ./src/
+ => [7/7] RUN mkdir -p models
+ => exporting to image
+ => => naming to docker.io/library/ml-app:latest
+```
 
-### Running with Docker
+### Running Dockerized Application
 
-**Run the training script:**
+#### 1. Train the Model in Docker
+
+Train the model and save it locally using volume mount:
+
 ```bash
-docker run --rm ml-app:latest python src/train.py
+sudo docker run --rm -v $(pwd)/models:/app/models ml-app:latest python src/train.py
 ```
 
-**Run the prediction script:**
-```bash
-docker run --rm ml-app:latest python src/predict.py
+**Output:**
+```
+Starting Iris Classifier Training...
+Loading Iris dataset...
+Successfully loaded Iris dataset
+   Features: 4, Samples: 150
+   Training set: 120 samples
+   Test set: 30 samples
+Training Logistic Regression model...
+Evaluating model...
+Model Accuracy: 0.9667
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       1.00      1.00      1.00        10
+           1       1.00      0.90      0.95        10
+           2       0.91      1.00      0.95        10
+
+    accuracy                           0.97        30
+   macro avg       0.97      0.97      0.97        30
+weighted avg       0.97      0.97      0.97        30
+
+Training completed successfully!
+Model saved to: models/iris_classifier.pkl
 ```
 
-**Run tests in Docker:**
+#### 2. Run Predictions in Docker
+
+Make predictions using the trained model:
+
 ```bash
-docker run --rm ml-app:latest pytest tests/ -v
+sudo docker run --rm -v $(pwd)/models:/app/models ml-app:latest python src/predict.py
 ```
 
-**Run linting in Docker:**
+#### 3. Run API Server in Docker
+
+Start the FastAPI server in a container:
+
 ```bash
-docker run --rm ml-app:latest flake8 src/
+# Run in detached mode with port mapping
+sudo docker run --rm -d \
+  -p 8000:8000 \
+  -v $(pwd)/models:/app/models \
+  --name ml-app-api \
+  ml-app:latest python src/app.py
 ```
+
+**Test the API:**
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# Single prediction
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sepal_length": 5.1,
+    "sepal_width": 3.5,
+    "petal_length": 1.4,
+    "petal_width": 0.2
+  }'
+
+# Batch predictions
+curl -X POST http://localhost:8000/predict/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "instances": [
+      {"sepal_length": 5.1, "sepal_width": 3.5, "petal_length": 1.4, "petal_width": 0.2},
+      {"sepal_length": 6.7, "sepal_width": 3.0, "petal_length": 5.2, "petal_width": 2.3}
+    ]
+  }'
+```
+
+**Stop the container:**
+```bash
+sudo docker stop ml-app-api
+```
+
+#### 4. Run Tests in Docker
+
+Run pytest tests inside a container:
+
+```bash
+sudo docker run --rm ml-app:latest pytest tests/ -v
+```
+
+#### 5. Run Linting in Docker
+
+Check code quality with flake8:
+
+```bash
+sudo docker run --rm ml-app:latest flake8 src/
+```
+
+### Docker Compose (Alternative)
+
+Use docker-compose for easier management:
+
+```bash
+# Start services
+sudo docker-compose up -d
+
+# View logs
+sudo docker-compose logs -f
+
+# Stop services
+sudo docker-compose down
+```
+
+The `docker-compose.yml` defines two services:
+- **train**: Runs the training script once
+- **api**: Runs the FastAPI server with auto-restart
 
 ### Docker Best Practices
 
-The `.dockerignore` file excludes:
+The `.dockerignore` file excludes unnecessary files:
 - Python cache files (`__pycache__`, `*.pyc`)
 - Virtual environments (`.venv`, `venv`)
 - IDE configurations (`.vscode`, `.idea`)
@@ -337,6 +461,117 @@ The `.dockerignore` file excludes:
 - Test and coverage files
 - Documentation files
 - CI/CD configurations
+
+### Docker Volume Mounting
+
+Volume mounting allows:
+- **Persistent model storage:** Models trained in Docker are saved to host
+- **Live code updates:** Changes to source code reflect in container (dev mode)
+- **Data sharing:** Share datasets between host and container
+
+**Example with multiple volumes:**
+```bash
+sudo docker run --rm \
+  -v $(pwd)/models:/app/models \
+  -v $(pwd)/data:/app/data \
+  -v $(pwd)/outputs:/app/outputs \
+  ml-app:latest python src/train.py
+```
+
+### Docker Image Information
+
+View image details:
+```bash
+# List images
+sudo docker images | grep ml-app
+
+# Inspect image
+sudo docker inspect ml-app:latest
+
+# Check image size
+sudo docker images ml-app:latest --format "{{.Size}}"
+```
+
+**Typical image size:** ~600-800 MB
+
+### Docker Container Management
+
+```bash
+# List running containers
+sudo docker ps
+
+# List all containers (including stopped)
+sudo docker ps -a
+
+# View container logs
+sudo docker logs ml-app-api
+
+# Execute command in running container
+sudo docker exec -it ml-app-api bash
+
+# Stop container
+sudo docker stop ml-app-api
+
+# Remove container
+sudo docker rm ml-app-api
+
+# Remove image
+sudo docker rmi ml-app:latest
+```
+
+### Production Deployment
+
+For production deployment:
+
+1. **Use specific version tags:**
+```bash
+sudo docker build -t ml-app:v1.0.0 .
+sudo docker tag ml-app:v1.0.0 ml-app:latest
+```
+
+2. **Set environment variables:**
+```bash
+sudo docker run --rm -d \
+  -p 8000:8000 \
+  -e MODEL_PATH=/app/models/iris_classifier.pkl \
+  -e LOG_LEVEL=INFO \
+  -v $(pwd)/models:/app/models \
+  ml-app:latest python src/app.py
+```
+
+3. **Health checks:**
+```bash
+sudo docker run --rm -d \
+  -p 8000:8000 \
+  --health-cmd="curl -f http://localhost:8000/health || exit 1" \
+  --health-interval=30s \
+  --health-timeout=10s \
+  --health-retries=3 \
+  ml-app:latest python src/app.py
+```
+
+4. **Resource limits:**
+```bash
+sudo docker run --rm -d \
+  -p 8000:8000 \
+  --memory="512m" \
+  --cpus="1.0" \
+  ml-app:latest python src/app.py
+```
+
+### Task 6 Completion Checklist
+
+- [x] Dockerfile created with all necessary configurations
+- [x] Docker image builds successfully
+- [x] Container exposes port 8000 for API access
+- [x] Training script runs successfully in Docker
+- [x] Prediction script works in Docker environment
+- [x] FastAPI server runs and serves predictions
+- [x] Volume mounting works for model persistence
+- [x] All API endpoints tested and functional
+- [x] Docker best practices implemented (.dockerignore)
+- [x] docker-compose.yml created for easy orchestration
+- [x] Documentation updated with Docker usage instructions
 
 ---
 
